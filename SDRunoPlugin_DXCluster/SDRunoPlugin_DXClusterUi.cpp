@@ -62,6 +62,24 @@ void SDRunoPlugin_DXClusterUi::SaveButtonClicked()
 }
 
 // Load X from the ini file (if exists)
+static int parseIntOr(const std::string& s, int dflt)
+{
+	try
+	{
+		size_t pos = 0;
+		int v = stoi(s, &pos);
+		if (pos != s.size())
+		{
+			return dflt;
+		}
+		return v;
+	}
+	catch (...)
+	{
+		return dflt;
+	}
+}
+
 int SDRunoPlugin_DXClusterUi::LoadX()
 {
 	std::string tmp;
@@ -70,7 +88,7 @@ int SDRunoPlugin_DXClusterUi::LoadX()
 	{
 		return -1;
 	}
-	return stoi(tmp);
+	return parseIntOr(tmp, -1);
 }
 
 // Load Y from the ini file (if exists)
@@ -82,7 +100,7 @@ int SDRunoPlugin_DXClusterUi::LoadY()
 	{
 		return -1;
 	}
-	return stoi(tmp);
+	return parseIntOr(tmp, -1);
 }
 
 std::string SDRunoPlugin_DXClusterUi::LoadCallsign()
@@ -104,7 +122,16 @@ int SDRunoPlugin_DXClusterUi::LoadTimer()
 	{
 		return 5; // in minutes
 	}
-	return stoi(tmp);
+	int v = parseIntOr(tmp, 5);
+	if (v < 1)
+	{
+		v = 1;
+	}
+	if (v > 120)
+	{
+		v = 120;
+	}
+	return v;
 }
 
 int SDRunoPlugin_DXClusterUi::LoadColour()
@@ -115,7 +142,12 @@ int SDRunoPlugin_DXClusterUi::LoadColour()
 	{
 		return 1; // yellow
 	}
-	return stoi(tmp);
+	int v = parseIntOr(tmp, 1);
+	if (v < 0 || v > 5)
+	{
+		v = 1;
+	}
+	return v;
 }
 
 int SDRunoPlugin_DXClusterUi::LoadBaseline()
@@ -126,7 +158,7 @@ int SDRunoPlugin_DXClusterUi::LoadBaseline()
 	{
 		return -70;
 	}
-	return stoi(tmp);
+	return parseIntOr(tmp, -70);
 }
 
 bool SDRunoPlugin_DXClusterUi::LoadOrder()

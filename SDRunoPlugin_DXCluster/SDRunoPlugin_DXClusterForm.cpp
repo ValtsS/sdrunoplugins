@@ -424,17 +424,24 @@ bool SDRunoPlugin_DXClusterForm::checkTimer()
 		return false;
 	}
 
-	std::string sTimer = timerTb.text();
-	int iTimer = stoi(sTimer);
+	int iTimer;
+	try
+	{
+		iTimer = stoi(timerTb.text());
+	}
+	catch (...)
+	{
+		return false;
+	}
 
 	if (iTimer < 1)
 	{
 		iTimer = 1;
 		timerTb.caption(std::to_string(iTimer));
 	}
-	else if( iTimer > 20)
+	else if (iTimer > 120)
 	{
-		iTimer = 20;
+		iTimer = 120;
 		timerTb.caption(std::to_string(iTimer));
 	}
 
