@@ -2,6 +2,7 @@
 
 #include <nana/gui.hpp>
 #include <nana/gui/widgets/button.hpp>
+#include <nana/gui/widgets/checkbox.hpp>
 #include <nana/gui/widgets/listbox.hpp>
 #include <nana/gui/widgets/slider.hpp>
 #include <nana/gui/widgets/label.hpp>
@@ -95,11 +96,33 @@ public:
 	{
 		return colourCb.option();
 	}
+
+	bool GetOrderTopDown()
+	{
+		try { return orderChk.checked(); } catch (...) { return false; }
+	}
+
+	void SetOrderCheckBox(bool checked)
+	{
+		orderChk.check(checked);
+	}
+
+	void SetOrderCheckBoxState(bool state)
+	{
+		orderChk.enabled(state);
+	}
 	
 	int GetBaseline()
 	{
-		if(baselineTb.text().empty()) return -70;
-		return stoi(baselineTb.text());
+		try
+		{
+			if(baselineTb.text().empty()) return -70;
+			return stoi(baselineTb.text());
+		}
+		catch (...)
+		{
+			return -70;
+		}
 	}
 
 	std::string colours[6] = {
@@ -150,6 +173,7 @@ private:
 	nana::textbox timerTb{ *this, nana::rectangle(228, 35, 50, 20) };
 	nana::button startBtn{ *this, nana::rectangle(18, 165, 80, 20) };
 	nana::button saveBtn{ *this, nana::rectangle(18, 195, 80, 20) };
+	nana::checkbox orderChk{ *this, nana::rectangle(108, 193, 140, 20) };
 	nana::label  baselineLbl{ *this, nana::rectangle(18, 87, 80, 20) };
 	nana::textbox baselineTb{ *this, nana::rectangle(98, 85, 40, 20) };
 	nana::label colourLbl{ *this, nana::rectangle(138, 87, 70, 20) };

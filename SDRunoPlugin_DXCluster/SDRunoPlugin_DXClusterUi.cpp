@@ -129,6 +129,13 @@ int SDRunoPlugin_DXClusterUi::LoadBaseline()
 	return stoi(tmp);
 }
 
+bool SDRunoPlugin_DXClusterUi::LoadOrder()
+{
+	std::string tmp;
+	m_controller.GetConfigurationKey("DXCluster.Order", tmp);
+	return tmp == "1";
+}
+
 std::string SDRunoPlugin_DXClusterUi::LoadCluster()
 {
 	std::string tmp;
@@ -167,6 +174,7 @@ void SDRunoPlugin_DXClusterUi::StartDXCluster(std::string addr, std::string port
 			m_form->SetColourComboBoxState(false);
 			m_form->SetBaselineTextboxState(false);
 			m_form->SetResponseTextboxState(false);
+			m_form->SetOrderCheckBoxState(false);
 			m_form->StartTimer();
 		}
 		m_started = true;
@@ -189,6 +197,7 @@ void SDRunoPlugin_DXClusterUi::StopDXCluster()
 			m_form->SetColourComboBoxState(true);
 			m_form->SetBaselineTextboxState(true);
 			m_form->SetResponseTextboxState(true);
+			m_form->SetOrderCheckBoxState(true);
 		}
 		m_started = false;
 	}
@@ -243,6 +252,25 @@ int SDRunoPlugin_DXClusterUi::DXCount()
 	return m_parent.DXCount();
 }
 
+bool SDRunoPlugin_DXClusterUi::GetOrderTopDown()
+{
+	if (m_form != nullptr)
+	{
+		try { return m_form->GetOrderTopDown(); } catch (...) { }
+	}
+	return false;
+}
+
+void SDRunoPlugin_DXClusterUi::UpdateSpanCache()
+{
+	m_parent.UpdateSpanCache();
+}
+
+std::string SDRunoPlugin_DXClusterUi::GetStatusDetail()
+{
+	return m_parent.GetStatusDetail();
+}
+
 int SDRunoPlugin_DXClusterUi::GetColourIndex()
 {
 	return m_form->GetColourIndex();
@@ -275,5 +303,6 @@ void SDRunoPlugin_DXClusterUi::SaveSettings()
 		}
 		m_controller.SetConfigurationKey("DXCluster.Colour", std::to_string(m_form->GetColourIndex()));
 		m_controller.SetConfigurationKey("DXCluster.Baseline", std::to_string(m_form->GetBaseline()));
+		m_controller.SetConfigurationKey("DXCluster.Order", m_form->GetOrderTopDown() ? "1" : "0");
 	}
 }

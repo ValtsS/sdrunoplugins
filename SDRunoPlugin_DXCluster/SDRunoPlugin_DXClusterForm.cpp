@@ -225,6 +225,7 @@ void SDRunoPlugin_DXClusterForm::Setup()
 	int colourIndex = m_parent.LoadColour();
 	int baseline = m_parent.LoadBaseline();
 	std::string response = m_parent.LoadResponse();
+	bool orderTopDown = m_parent.LoadOrder();
 
 	const uint32_t forecolor = 0xffffff;
 
@@ -314,6 +315,11 @@ void SDRunoPlugin_DXClusterForm::Setup()
 	}
 	colourCb.option(colourIndex);
 
+	orderChk.caption("Top-down labels");
+	orderChk.fgcolor(nana::color_rgb(forecolor));
+	orderChk.transparent(true);
+	orderChk.check(orderTopDown);
+
 	statusLbl.caption("Status:");
 	statusLbl.fgcolor(nana::color_rgb(forecolor));
 	statusLbl.transparent(true);
@@ -364,14 +370,30 @@ void SDRunoPlugin_DXClusterForm::Setup()
 	m_timer.elapse([&] {
 		m_timerCount++;
 
+		// Refresh the cached SP1 power span on our own thread - the
+		// annotator hot path only reads the cache, never the controller.
+		try { m_parent.UpdateSpanCache(); } catch (...) { }
+
 		// check & update annotation list (timer * 60)
 		if (m_parent.IsRunning())
 		{
-			statusLbl.caption("Status: Running - DX count: " + std::to_string(m_parent.DXCount()));
+			std::string detail = m_parent.GetStatusDetail();
+			std::string caption = "Status: Running - DX count: " + std::to_string(m_parent.DXCount());
+			if (!detail.empty())
+			{
+				caption += " | " + detail;
+			}
+			statusLbl.caption(caption);
 		}
 		else
 		{
-			statusLbl.caption("Status: Stopped");
+			std::string detail = m_parent.GetStatusDetail();
+			std::string caption = "Status: Stopped";
+			if (!detail.empty())
+			{
+				caption += " | " + detail;
+			}
+			statusLbl.caption(caption);
 			if (startBtn.caption() != "Start")
 			{
 				m_parent.StartButtonClicked("a", "1", "b", 1, "dxspider");

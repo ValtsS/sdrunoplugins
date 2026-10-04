@@ -32,6 +32,11 @@ public:
 
 	int DXCount();
 
+	std::string GetStatusDetail();
+
+	bool GetOrderTopDown();
+	void UpdateSpanCache();
+
 	int LoadX();
 	int LoadY();
 	std::string LoadCallsign();
@@ -40,6 +45,7 @@ public:
 	std::string LoadResponse();
 	int LoadColour();
 	int LoadBaseline();
+	bool LoadOrder();
 
 	int GetColourIndex();
 	int GetBaseline();
