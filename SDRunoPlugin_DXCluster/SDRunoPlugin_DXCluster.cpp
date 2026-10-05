@@ -174,11 +174,14 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 			int pwr = topDown ? (anchor - count * 5) : (anchor + count * 5);
 			im.power = pwr;
 			im.rgb = rgb;
-			// No leader lines (original look): anchor off-screen so no
-			// line is drawn. Set explicitly - the old code left these
-			// fields uninitialised.
-			im.lineToFreq = 0;
-			im.lineToPower = -1000;
+			// Degenerate zero-length anchor at the marker itself: every
+			// field carries a real in-span value, so no projection in
+			// SDRuno's renderer ever sees 0 Hz or off-scale dB from us.
+			// (Previously this was (0, -1000); the ADSB reference plugin
+			// never submits degenerate anchors, and our hangs only ever
+			// started once real non-empty lists reached the renderer.)
+			im.lineToFreq = im.frequency;
+			im.lineToPower = im.power;
 			if (count == 0)
 			{
 				im.style = IUnoAnnotatorStyle::AnnotatorStyleMarkerAndLine;
