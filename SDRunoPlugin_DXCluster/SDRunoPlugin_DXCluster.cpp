@@ -111,9 +111,6 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 		std::vector<SnapEntry> snap;
 		int baseline = -70;
 		int colourIdx = 1;
-		int spanMin = 0, spanMax = 0;
-		long long spanFreqMin = 0, spanFreqMax = 0;
-		bool haveSpan = false;
 		bool topDown = false;
 		m_statAnnotatorCalls++;
 		bool logThis = (m_statAnnotatorCalls == 1 || m_statAnnotatorCalls % 120 == 0);
@@ -128,11 +125,6 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 			}
 			try { baseline = m_form.GetBaseline(); } catch (...) { baseline = -70; }
 			try { colourIdx = m_form.GetColourIndex(); } catch (...) { colourIdx = 1; }
-			haveSpan = m_spanValid;
-			spanMin = m_sp1MinPwrC;
-			spanMax = m_sp1MaxPwrC;
-			spanFreqMin = m_sp1MinFreqC;
-			spanFreqMax = m_sp1MaxFreqC;
 		}
 		try { topDown = m_form.GetOrderTopDown(); } catch (...) { topDown = false; }
 		if (colourIdx < 0 || colourIdx > 5)
@@ -140,43 +132,11 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 			colourIdx = 1;
 		}
 		uint32_t rgb = colors[colourIdx];
-		// Anchor + direction. Bottom-up (original): climb from baseline.
-		// Top-down: start at the cached screen top and descend, i.e. the
-		// same algorithm hung from the top instead of standing on the
-		// baseline. Both ends clamp 3 dB inside the cached SP1 power span
-		// when one is known, so labels stay on screen either way.
-		int floorPwr = baseline, ceilPwr = baseline;
-		bool haveRange = (haveSpan && spanMax > spanMin);
-		if (haveRange)
-		{
-			floorPwr = spanMin + 3;
-			ceilPwr = spanMax - 3;
-			if (ceilPwr < floorPwr)
-			{
-				floorPwr = spanMin;
-				ceilPwr = spanMax;
-			}
-		}
-		int anchor;
-		if (topDown)
-		{
-			anchor = haveRange ? ceilPwr : baseline;
-		}
-		else
-		{
-			anchor = baseline;
-			if (haveRange)
-			{
-				if (anchor < floorPwr)
-				{
-					anchor = floorPwr;
-				}
-				if (anchor > ceilPwr)
-				{
-					anchor = ceilPwr;
-				}
-			}
-		}
+		// Anchor + direction, no screen clamping (we deliberately query no
+		// SP1 state anywhere - see UpdateSpanCache). Bottom-up (original):
+		// climb from baseline. Top-down: same algorithm hung from the
+		// baseline downward instead.
+		int anchor = baseline;
 		int window;
 		if (sampleRate >= 2000000)
 		{
@@ -188,16 +148,16 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 		}
 		std::vector<long long> drawn;
 		drawn.reserve(snap.size());
-		for (size_t idx = 0; idx < snap.size(); idx++)
+		// Volume cap: the stock plugin on servers like ours never got past
+		// login, so SDRuno never rendered more than a handful of markers
+		// from it. Now that parsing actually works, 100-180 items per
+		// redraw go to SDRuno's renderer and it falls over. Submit only the
+		// newest CAP items (the list is oldest-first, re-spots move to the
+		// end). dxCount below still reflects the full list.
+		const size_t kMaxAnnotatorItems = 40;
+		size_t first = (snap.size() > kMaxAnnotatorItems) ? (snap.size() - kMaxAnnotatorItems) : 0;
+		for (size_t idx = first; idx < snap.size(); idx++)
 		{
-			// In-span filter: SDRuno would cull off-screen markers itself,
-			// but handing it 150+ items every redraw is what we suspect of
-			// stalling its render path - only submit what can be seen.
-			// dxCount below still reflects the full list.
-			if (haveSpan && (snap[idx].freq < spanFreqMin || snap[idx].freq > spanFreqMax))
-			{
-				continue;
-			}
 			IUnoAnnotatorItem im;
 			im.frequency = snap[idx].freq;
 			im.text = snap[idx].callsign;
@@ -212,17 +172,6 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 				}
 			}
 			int pwr = topDown ? (anchor - count * 5) : (anchor + count * 5);
-			if (haveRange)
-			{
-				if (pwr < floorPwr)
-				{
-					pwr = floorPwr;
-				}
-				if (pwr > ceilPwr)
-				{
-					pwr = ceilPwr;
-				}
-			}
 			im.power = pwr;
 			im.rgb = rgb;
 			// No leader lines (original look): anchor off-screen so no
@@ -249,7 +198,8 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 				" items=" + std::to_string(items.size()) +
 				" dx=" + std::to_string(m_statDx) +
 				" order=" + std::string(topDown ? "top-down" : "bottom-up") +
-				" span=" + (haveSpan ? (std::to_string(spanMin) + ".." + std::to_string(spanMax) + "dB") : "unknown"));
+				" span=unknown" +
+				std::string(snap.size() > 40 ? " capped" : ""));
 		}
 	}
 	catch (...)
