@@ -568,20 +568,96 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 	}
 #endif
 
-	// Connect to server
-	if (connect(s, addrs->ai_addr, (int)addrs->ai_addrlen) != 0)
+	// Publish early so StopDXCluster can abort even a stuck connect().
 	{
+		std::lock_guard<std::mutex> l(m_lock);
+		m_sock = s;
+	}
+
+	// Connect to server with a timeout. A blocking connect() has no bound
+	// (SYN retransmits for minutes on a black-holed route) and Stop cannot
+	// rescue it before m_sock is assigned, so the join in StopDXCluster
+	// would wedge the panel. Non-blocking + select() caps this at 10 s.
+	bool connected = false;
+	int connErr = 0;
 #ifdef _WIN32
-		int err = WSAGetLastError();
+	u_long nb = 1;
+	if (ioctlsocket(s, FIONBIO, &nb) == 0)
+	{
+		if (connect(s, addrs->ai_addr, (int)addrs->ai_addrlen) == 0)
+		{
+			connected = true;
+		}
+		else if (WSAGetLastError() == WSAEWOULDBLOCK)
+		{
+			fd_set wf;
+			FD_ZERO(&wf);
+			FD_SET(s, &wf);
+			timeval tv;
+			tv.tv_sec = 10;
+			tv.tv_usec = 0;
+			int r = select((int)s + 1, NULL, &wf, NULL, &tv);
+			if (r > 0 && FD_ISSET(s, &wf))
+			{
+				int soerr = 0;
+				int optlen = sizeof(soerr);
+				if (getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&soerr, &optlen) == 0 && soerr == 0)
+				{
+					connected = true;
+				}
+				else
+				{
+					connErr = soerr;
+				}
+			}
+			else if (r == 0)
+			{
+				connErr = WSAETIMEDOUT;
+			}
+			else
+			{
+				connErr = WSAGetLastError();
+			}
+		}
+		else
+		{
+			connErr = WSAGetLastError();
+		}
+		nb = 0;
+		ioctlsocket(s, FIONBIO, &nb);
+	}
+	else
+	{
+		connErr = WSAGetLastError();
+	}
+#else
+	if (connect(s, addrs->ai_addr, (int)addrs->ai_addrlen) == 0)
+	{
+		connected = true;
+	}
+	else
+	{
+		connErr = errno;
+	}
+#endif
+	if (!connected)
+	{
+		{
+			std::lock_guard<std::mutex> l(m_lock);
+			if (m_sock == s)
+			{
+				m_sock = INVALID_SOCKET;
+			}
+		}
+#ifdef _WIN32
 		closesocket(s);
 		WSACleanup();
 #else
-		int err = errno;
 		close(s);
 #endif
 		freeaddrinfo(addrs);
-		Log("connect failed to " + cAddr + ":" + std::to_string(port) + " err=" + std::to_string(err));
-		SetStatus("conn failed " + std::to_string(err));
+		Log("connect failed to " + cAddr + ":" + std::to_string(port) + " err=" + std::to_string(connErr));
+		SetStatus("conn failed " + std::to_string(connErr));
 		m_started = false;
 		return;
 	}
@@ -591,7 +667,6 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 
 	{
 		std::lock_guard<std::mutex> l(m_lock);
-		m_sock = s;
 		if (!m_started)
 		{
 			// Stopped while connecting; StopDXCluster already closed it.
