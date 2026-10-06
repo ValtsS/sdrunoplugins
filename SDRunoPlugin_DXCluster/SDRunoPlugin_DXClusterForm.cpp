@@ -370,9 +370,9 @@ void SDRunoPlugin_DXClusterForm::Setup()
 	m_timer.elapse([&] {
 		m_timerCount++;
 
-		// Refresh the cached SP1 power span on our own thread - the
-		// annotator hot path only reads the cache, never the controller.
-		try { m_parent.UpdateSpanCache(); } catch (...) { }
+		// Refresh the cached widget state on our own (nana) thread - the
+		// annotator hot path only reads the cache, never widgets.
+		try { m_parent.RefreshUiCache(); } catch (...) { }
 
 		// check & update annotation list (timer * 60)
 		if (m_parent.IsRunning())

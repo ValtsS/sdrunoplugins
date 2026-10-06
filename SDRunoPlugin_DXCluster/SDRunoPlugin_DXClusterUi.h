@@ -35,7 +35,7 @@ public:
 	std::string GetStatusDetail();
 
 	bool GetOrderTopDown();
-	void UpdateSpanCache();
+	void RefreshUiCache();
 
 	int LoadX();
 	int LoadY();

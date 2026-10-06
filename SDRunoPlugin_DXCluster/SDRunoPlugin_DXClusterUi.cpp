@@ -293,9 +293,9 @@ bool SDRunoPlugin_DXClusterUi::GetOrderTopDown()
 	return false;
 }
 
-void SDRunoPlugin_DXClusterUi::UpdateSpanCache()
+void SDRunoPlugin_DXClusterUi::RefreshUiCache()
 {
-	m_parent.UpdateSpanCache();
+	m_parent.RefreshUiCache();
 }
 
 std::string SDRunoPlugin_DXClusterUi::GetStatusDetail()

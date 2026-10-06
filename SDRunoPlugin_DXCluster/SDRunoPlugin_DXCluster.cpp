@@ -43,11 +43,9 @@ SDRunoPlugin_DXCluster::SDRunoPlugin_DXCluster(IUnoPluginController& controller)
 	m_statDx(0),
 	m_statParseFail(0),
 	m_statAnnotatorCalls(0),
-	m_sp1MinPwrC(0),
-	m_sp1MaxPwrC(0),
-	m_sp1MinFreqC(0),
-	m_sp1MaxFreqC(0),
-	m_spanValid(false)
+	m_baselineC(-70),
+	m_colourIdxC(1),
+	m_orderTopDownC(false)
 {
 	const char* appdata = getenv("APPDATA");
 	if (appdata != NULL && appdata[0] != 0)
@@ -90,10 +88,10 @@ SDRunoPlugin_DXCluster::~SDRunoPlugin_DXCluster()
 
 void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& items)
 {
-	// Runs on SDRuno's thread at redraw rate: never block, never throw,
-	// never call back into the controller from here. (A build that queried
-	// SP1 span + drew leader lines on this path wedged SDRuno after a
-	// single call, so this stays at the original placement formula.)
+	// Runs on SDRuno's thread at redraw rate. Deliberate constraints that
+	// all hangs taught us: no controller calls, no widget reads (cached
+	// copies only), no exceptions out, bounded output. Everything cross-
+	// thread arrives via m_lock-protected snapshot + cache.
 	try
 	{
 		const uint32_t colors[] = {
@@ -105,13 +103,11 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 			0x00ffffff  // white
 		};
 
-		// Snapshot the list under lock: the worker thread mutates it while
-		// SDRuno calls us on its own thread. Never walk shared nodes directly.
 		struct SnapEntry { long long freq; std::string callsign; };
 		std::vector<SnapEntry> snap;
-		int baseline = -70;
-		int colourIdx = 1;
-		bool topDown = false;
+		int baseline;
+		int colourIdx;
+		bool topDown;
 		m_statAnnotatorCalls++;
 		bool logThis = (m_statAnnotatorCalls == 1 || m_statAnnotatorCalls % 120 == 0);
 		{
@@ -123,13 +119,9 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 				s.callsign = e->callsign;
 				snap.push_back(s);
 			}
-			try { baseline = m_form.GetBaseline(); } catch (...) { baseline = -70; }
-			try { colourIdx = m_form.GetColourIndex(); } catch (...) { colourIdx = 1; }
-		}
-		try { topDown = m_form.GetOrderTopDown(); } catch (...) { topDown = false; }
-		if (colourIdx < 0 || colourIdx > 5)
-		{
-			colourIdx = 1;
+			baseline = m_baselineC;
+			colourIdx = m_colourIdxC;
+			topDown = m_orderTopDownC;
 		}
 		uint32_t rgb = colors[colourIdx];
 		// Anchor + direction, no screen clamping (we deliberately query no
@@ -201,7 +193,6 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 				" items=" + std::to_string(items.size()) +
 				" dx=" + std::to_string(m_statDx) +
 				" order=" + std::string(topDown ? "top-down" : "bottom-up") +
-				" span=unknown" +
 				std::string(snap.size() > 40 ? " capped" : ""));
 		}
 	}
@@ -210,37 +201,6 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 		// Never let an exception escape into SDRuno.
 		try { Log("annotator exception swallowed"); } catch (...) {}
 	}
-}
-
-int SDRunoPlugin_DXCluster::checkLocalFreq(long long freq, std::string callsign)
-{
-	freqcurr = head;
-	int count = 0;
-	int window;
-	if (sampleRate >= 2000000)
-	{
-		window = (int)(sampleRate / 100.);
-	}
-	else
-	{
-		window = (int)(sampleRate / 20.);
-	}
-	while (freqcurr != NULL)
-	{
-		if (callsign.compare(freqcurr->callsign) == 0)
-		{
-			break;
-		}
-		else
-		{
-			if (llabs(freq - freqcurr->freq) < window)
-			{
-				count++;
-			}
-		}
-		freqcurr = freqcurr->next;
-	}
-	return count;
 }
 
 void SDRunoPlugin_DXCluster::StartAnnotator()
@@ -1075,12 +1035,23 @@ void SDRunoPlugin_DXCluster::UpdateSampleRate()
 	sampleRate = (int)m_controller.GetSampleRate(0);
 }
 
-// Called ~1/s from the plugin's own form-timer thread. Deliberately a
-// no-op: every build that queried SP1 state (GetSP1Min/MaxPower/Frequency,
-// on any thread) hung SDRuno within minutes, while builds without any
-// SP1 queries ran for hours. See log/dx analysis 2026-10-04.
-void SDRunoPlugin_DXCluster::UpdateSpanCache()
+// Called ~1/s from the plugin's own form-timer thread. Deliberately queries
+// no SP1/controller state (every build that did hung SDRuno within minutes);
+// it only copies widget state into plain cached members for the hot path.
+void SDRunoPlugin_DXCluster::RefreshUiCache()
 {
+	int baseline = -70;
+	int colourIdx = 1;
+	bool topDown = false;
+	try { baseline = m_form.GetBaseline(); } catch (...) { }
+	try { colourIdx = m_form.GetColourIndex(); } catch (...) { }
+	try { topDown = m_form.GetOrderTopDown(); } catch (...) { }
+	if (colourIdx < 0 || colourIdx > 5)
+	{
+		colourIdx = 1;
+	}
 	std::lock_guard<std::mutex> l(m_lock);
-	m_spanValid = false;
+	m_baselineC = baseline;
+	m_colourIdxC = colourIdx;
+	m_orderTopDownC = topDown;
 }

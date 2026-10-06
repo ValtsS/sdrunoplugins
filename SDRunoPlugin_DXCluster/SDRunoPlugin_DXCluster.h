@@ -43,7 +43,12 @@ public:
 	void StopAnnotator();
 
 	void UpdateSampleRate();
-	void UpdateSpanCache();
+	// RefreshUiCache: copies widget state (baseline/colour/order) into
+	// plain members. Called ~1/s from OUR form-timer thread (nana's own
+	// thread - the only thread that may touch widgets). The annotator hot
+	// path (SDRuno's thread) reads only these cached copies: never widgets,
+	// never the controller.
+	void RefreshUiCache();
 
 	int DXCount() { return dxCount; }
 	std::string GetStatusDetail();
@@ -77,7 +82,6 @@ private:
 	void clearList();
 	void add_DXEntry(std::string callsign, std::string t, long long freq);
 	bool olderThanTimer(std::string timeUTC);
-	int checkLocalFreq(long long freq, std::string callsign);
 
 	std::string cAddr;
 	std::string cPort;
@@ -85,7 +89,7 @@ private:
 	std::string cResponse;
 	int timeMinutes;
 	int dxCount;
-	int sampleRate;
+	std::atomic<int> sampleRate;
 	bool responseMatched;
 	SOCKET m_sock;
 
@@ -102,13 +106,9 @@ private:
 	long long m_statDx;
 	long long m_statParseFail;
 	long long m_statAnnotatorCalls;
-	// SP1 power span cache. Refreshed by UpdateSpanCache() from the
-	// plugin's own timer thread - the AnnotatorProcess hot path (which
-	// runs on SDRuno's thread) only READS these, never calls the
-	// controller. Set m_spanValid=false when the values are unusable.
-	int m_sp1MinPwrC;
-	int m_sp1MaxPwrC;
-	long long m_sp1MinFreqC;
-	long long m_sp1MaxFreqC;
-	bool m_spanValid;
+	// Widget-state cache, see RefreshUiCache. Written on our timer thread,
+	// read on SDRuno's annotator thread, always under m_lock.
+	int m_baselineC;
+	int m_colourIdxC;
+	bool m_orderTopDownC;
 };
