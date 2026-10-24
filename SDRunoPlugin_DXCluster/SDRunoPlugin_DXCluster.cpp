@@ -140,15 +140,7 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 		}
 		std::vector<long long> drawn;
 		drawn.reserve(snap.size());
-		// Volume cap: the stock plugin on servers like ours never got past
-		// login, so SDRuno never rendered more than a handful of markers
-		// from it. Now that parsing actually works, 100-180 items per
-		// redraw go to SDRuno's renderer and it falls over. Submit only the
-		// newest CAP items (the list is oldest-first, re-spots move to the
-		// end). dxCount below still reflects the full list.
-		const size_t kMaxAnnotatorItems = 40;
-		size_t first = (snap.size() > kMaxAnnotatorItems) ? (snap.size() - kMaxAnnotatorItems) : 0;
-		for (size_t idx = first; idx < snap.size(); idx++)
+		for (size_t idx = 0; idx < snap.size(); idx++)
 		{
 			IUnoAnnotatorItem im;
 			im.frequency = snap[idx].freq;
@@ -1025,25 +1017,6 @@ void SDRunoPlugin_DXCluster::processDXLine(const std::string& line)
 		}
 
 		add_DXEntry(scsign, stimeZ, llfreqHz);
-
-		// Hard cap: bounds the AnnotatorProcess O(n^2) overlap pass even
-		// if expiry stalls (e.g. clock jumps). Oldest entries go first.
-		int n = 0;
-		for (DXEntry* e = head; e != NULL; e = e->next)
-		{
-			n++;
-		}
-		while (n > 2000 && head != NULL)
-		{
-			DXEntry* old = head;
-			head = head->next;
-			delete old;
-			n--;
-		}
-		if (head == NULL)
-		{
-			tail = NULL;
-		}
 	}
 	Log("DX " + scsign + " " + std::to_string(llfreqHz) + "Hz " + stimeZ + "Z pruned=" + std::to_string(pruned));
 }
