@@ -38,24 +38,10 @@ SDRunoPlugin_DXCluster::SDRunoPlugin_DXCluster(IUnoPluginController& controller)
 	m_started(false),
 	m_sock(INVALID_SOCKET),
 	responseMatched(false),
-	m_statRecvBytes(0),
-	m_statLines(0),
-	m_statDx(0),
-	m_statParseFail(0),
-	m_statAnnotatorCalls(0),
 	m_baselineC(-70),
 	m_colourIdxC(1),
 	m_orderTopDownC(false)
 {
-	const char* appdata = getenv("APPDATA");
-	if (appdata != NULL && appdata[0] != 0)
-	{
-		m_logPath = std::string(appdata) + "\\SDRplay\\SDRunoPlugin_DXCluster.log";
-	}
-	else
-	{
-		m_logPath = "SDRunoPlugin_DXCluster.log";
-	}
 }
 
 SDRunoPlugin_DXCluster::~SDRunoPlugin_DXCluster()
@@ -108,8 +94,6 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 		int baseline;
 		int colourIdx;
 		bool topDown;
-		m_statAnnotatorCalls++;
-		bool logThis = (m_statAnnotatorCalls == 1 || m_statAnnotatorCalls % 120 == 0);
 		{
 			std::lock_guard<std::mutex> l(m_lock);
 			for (DXEntry* e = head; e != NULL; e = e->next)
@@ -179,19 +163,10 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 			drawn.push_back(snap[idx].freq);
 		}
 		dxCount = (int)snap.size();
-		if (logThis)
-		{
-			Log("annotator call #" + std::to_string(m_statAnnotatorCalls) +
-				" items=" + std::to_string(items.size()) +
-				" dx=" + std::to_string(m_statDx) +
-				" order=" + std::string(topDown ? "top-down" : "bottom-up") +
-				std::string(snap.size() > 40 ? " capped" : ""));
-		}
 	}
 	catch (...)
 	{
 		// Never let an exception escape into SDRuno.
-		try { Log("annotator exception swallowed"); } catch (...) {}
 	}
 }
 
@@ -219,7 +194,6 @@ void SDRunoPlugin_DXCluster::StartDXCluster(std::string addr, std::string port, 
 		return;
 	}
 
-	Log("=== start " + addr + ":" + port + " timer=" + std::to_string(timeMins) + "min ===");
 	m_started = true;
 	responseMatched = false;
 	UpdateSampleRate();
@@ -262,45 +236,11 @@ void SDRunoPlugin_DXCluster::StopDXCluster()
 		delete m_worker;
 		m_worker = nullptr;
 	}
-	Log("=== stopped ===");
-	SetStatus("stopped");
 }
 
 void SDRunoPlugin_DXCluster::HandleEvent(const UnoEvent& ev)
 {
 	m_form.HandleEvent(ev);	
-}
-
-void SDRunoPlugin_DXCluster::Log(const std::string& msg)
-{
-	std::lock_guard<std::mutex> l(m_logLock);
-	if (m_logPath.empty())
-	{
-		return;
-	}
-	SYSTEMTIME st;
-	GetLocalTime(&st);
-	char ts[32];
-	snprintf(ts, sizeof(ts), "%02d:%02d:%02d.%03d", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-	FILE* f = NULL;
-	fopen_s(&f, m_logPath.c_str(), "a");
-	if (f != NULL)
-	{
-		fprintf(f, "[%s] %s\n", ts, msg.c_str());
-		fclose(f);
-	}
-}
-
-void SDRunoPlugin_DXCluster::SetStatus(const std::string& s)
-{
-	std::lock_guard<std::mutex> l(m_logLock);
-	m_lastStatus = s;
-}
-
-std::string SDRunoPlugin_DXCluster::GetStatusDetail()
-{
-	std::lock_guard<std::mutex> l(m_logLock);
-	return m_lastStatus;
 }
 
 // read data until needle is seen (optionally case-insensitive)
@@ -423,7 +363,6 @@ bool SDRunoPlugin_DXCluster::waitForResponse(SOCKET sockfd, const std::string& n
 		auto now = std::chrono::steady_clock::now();
 		if (now >= deadline)
 		{
-			Log("response '" + needle + "' not seen in " + std::to_string(timeoutSec) + "s, proceeding anyway");
 			responseMatched = true;
 			return true;
 		}
@@ -448,7 +387,6 @@ bool SDRunoPlugin_DXCluster::waitForResponse(SOCKET sockfd, const std::string& n
 		{
 			return false;
 		}
-		m_statRecvBytes += res;
 		pending.append(buf, res);
 		size_t nl;
 		while ((nl = pending.find('\n')) != std::string::npos)
@@ -459,7 +397,6 @@ bool SDRunoPlugin_DXCluster::waitForResponse(SOCKET sockfd, const std::string& n
 			{
 				line.pop_back();
 			}
-			m_statLines++;
 			hay += line;
 			hay += '\n';
 			if (hay.size() > 8192)
@@ -479,7 +416,6 @@ bool SDRunoPlugin_DXCluster::waitForResponse(SOCKET sockfd, const std::string& n
 		if (lower.find(want) != std::string::npos)
 		{
 			responseMatched = true;
-			Log("response '" + needle + "' matched");
 			return true;
 		}
 	}
@@ -495,22 +431,15 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 		port = stoi(cPort, &pos);
 		if (pos != cPort.size() || port <= 0 || port > 65535)
 		{
-			Log("bad port '" + cPort + "'");
-			SetStatus("bad port");
 			m_started = false;
 			return;
 		}
 	}
 	catch (...)
 	{
-		Log("bad port '" + cPort + "'");
-		SetStatus("bad port");
 		m_started = false;
 		return;
 	}
-
-	Log("connecting to " + cAddr + ":" + std::to_string(port) + " as '" + cCallsign + "'");
-	SetStatus("connecting");
 
 #ifdef _WIN32
 	WSADATA wsa;
@@ -536,8 +465,6 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 #ifdef _WIN32
 		WSACleanup();
 #endif
-		Log("DNS failed for '" + cAddr + "'");
-		SetStatus("DNS failed");
 		m_started = false;
 		return;
 	}
@@ -571,7 +498,6 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 	// rescue it before m_sock is assigned, so the join in StopDXCluster
 	// would wedge the panel. Non-blocking + select() caps this at 10 s.
 	bool connected = false;
-	int connErr = 0;
 #ifdef _WIN32
 	u_long nb = 1;
 	if (ioctlsocket(s, FIONBIO, &nb) == 0)
@@ -597,39 +523,15 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 				{
 					connected = true;
 				}
-				else
-				{
-					connErr = soerr;
-				}
 			}
-			else if (r == 0)
-			{
-				connErr = WSAETIMEDOUT;
-			}
-			else
-			{
-				connErr = WSAGetLastError();
-			}
-		}
-		else
-		{
-			connErr = WSAGetLastError();
 		}
 		nb = 0;
 		ioctlsocket(s, FIONBIO, &nb);
-	}
-	else
-	{
-		connErr = WSAGetLastError();
 	}
 #else
 	if (connect(s, addrs->ai_addr, (int)addrs->ai_addrlen) == 0)
 	{
 		connected = true;
-	}
-	else
-	{
-		connErr = errno;
 	}
 #endif
 	if (!connected)
@@ -648,14 +550,10 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 		close(s);
 #endif
 		freeaddrinfo(addrs);
-		Log("connect failed to " + cAddr + ":" + std::to_string(port) + " err=" + std::to_string(connErr));
-		SetStatus("conn failed " + std::to_string(connErr));
 		m_started = false;
 		return;
 	}
 	freeaddrinfo(addrs);
-	Log("connected to " + cAddr + ":" + std::to_string(port));
-	SetStatus("connected");
 
 	{
 		std::lock_guard<std::mutex> l(m_lock);
@@ -669,59 +567,36 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 	// Login to Telnet Server
 	if (cCallsign.length() > 1)
 	{
-		if (waitforstring(s, "ogin: ", false))
-		{
-			Log("login prompt seen");
-		}
-		else
-		{
-			Log("login prompt NOT seen (stopped or socket dead)");
-		}
+		waitforstring(s, "ogin: ", false);
 		responseMatched = false;
 		char csTmp[64];
 		snprintf(csTmp, sizeof(csTmp), "%s\r\n", cCallsign.substr(0, sizeof(csTmp) - 3).c_str());
 		sendstring(s, csTmp);
-		Log("callsign sent");
 		if (cResponse.length() > 1)
 		{
 			// Case-insensitive, 10 s timeout, DX lines seen while
-			// waiting are still processed. SpotMux-style servers only
-			// banner the marker before the prompt, so without the
-			// timeout+proceed this gate never opens (DX count 0).
+			// waiting are still processed. Some servers (e.g. SpotMux)
+			// only banner the response marker before the prompt, so
+			// without the timeout+proceed this gate never opens.
 			std::string resp = cResponse.substr(0, 200);
-			if (waitForResponse(s, resp, 10))
+			if (!waitForResponse(s, resp, 10))
 			{
-				if (!m_started)
-				{
-					Log("stopped during response wait");
-					SetStatus("stopped");
-				}
-				// waitForResponse already logged matched vs timeout.
-			}
-			else
-			{
-				Log("socket died during response wait");
-				SetStatus("socket lost");
 				m_started = false;
 			}
 		}
 		else
 		{
 			responseMatched = true;
-			Log("no response string configured, skipping wait");
 		}
 	}
 	else
 	{
 		responseMatched = true;
-		Log("no callsign configured, skipping login");
 	}
-	SetStatus("receiving");
 
 	int res;
 	char buffer[MAXBUF];
 	std::string pending;
-	long long lastLoggedDx = 0;
 
 	// Now process DX records
 	while (m_started && responseMatched)
@@ -732,8 +607,6 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 		if (res == 0)
 		{
 			// Orderly shutdown by the server.
-			Log("server closed connection");
-			SetStatus("server closed");
 			m_started = false;
 			break;
 		}
@@ -746,8 +619,6 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 				continue;
 			}
 #endif
-			Log("recv error, stopping");
-			SetStatus("recv error");
 			m_started = false;
 			break;
 		}
@@ -758,7 +629,6 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 		}
 
 		buffer[res] = 0;
-		m_statRecvBytes += res;
 #ifdef DEBUG
 		char out[MAXBUF];
 		snprintf(out, sizeof(out), "SDRuno in %s", buffer);
@@ -776,18 +646,9 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 			{
 				line.pop_back();
 			}
-			m_statLines++;
 			if (line.find("DX de") != std::string::npos)
 			{
 				processDX(line.c_str());
-				if (m_statDx - lastLoggedDx >= 25)
-				{
-					lastLoggedDx = m_statDx;
-					Log("stats bytes=" + std::to_string(m_statRecvBytes) +
-						" lines=" + std::to_string(m_statLines) +
-						" dx=" + std::to_string(m_statDx) +
-						" parseFail=" + std::to_string(m_statParseFail));
-				}
 			}
 		}
 		if (pending.size() > 65536)
@@ -795,14 +656,6 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 			// Never saw a newline; drop garbage rather than grow forever.
 			pending.clear();
 		}
-	}
-	Log("recv loop ended: bytes=" + std::to_string(m_statRecvBytes) +
-		" lines=" + std::to_string(m_statLines) +
-		" dx=" + std::to_string(m_statDx) +
-		" parseFail=" + std::to_string(m_statParseFail));
-	if (m_started)
-	{
-		SetStatus("stopped");
 	}
 	{
 		std::lock_guard<std::mutex> l(m_lock);
@@ -963,22 +816,12 @@ void SDRunoPlugin_DXCluster::processDXLine(const std::string& line)
 	long long llfreqHz = 0;
 	if (!TokenParseDX(line, scsign, stimeZ, llfreqHz))
 	{
-		m_statParseFail++;
-		if (m_statParseFail <= 3)
-		{
-			Log("parse fail: '" + line.substr(0, 120) + "'");
-		}
 #ifdef DEBUG
 		OutputDebugStringA("SDRuno process line error");
 #endif
 		return;
 	}
-	m_statDx++;
 
-	// Per-spot accept log: lets "where is call X on band Y?" checks be
-	// answered by grepping the log. Volume is ~1 line/spot (burst is a
-	// one-off, steady state is a few/min). Logged outside the list lock.
-	int pruned = 0;
 	{
 		std::lock_guard<std::mutex> l(m_lock);
 		if (head != NULL)
@@ -1006,7 +849,6 @@ void SDRunoPlugin_DXCluster::processDXLine(const std::string& line)
 						tail = prevEntry;
 					}
 					delete p;
-					pruned++;
 				}
 				else
 				{
@@ -1018,7 +860,6 @@ void SDRunoPlugin_DXCluster::processDXLine(const std::string& line)
 
 		add_DXEntry(scsign, stimeZ, llfreqHz);
 	}
-	Log("DX " + scsign + " " + std::to_string(llfreqHz) + "Hz " + stimeZ + "Z pruned=" + std::to_string(pruned));
 }
 
 void SDRunoPlugin_DXCluster::add_DXEntry(std::string callsign, std::string t, long long freq)

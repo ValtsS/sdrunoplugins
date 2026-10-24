@@ -51,7 +51,6 @@ public:
 	void RefreshUiCache();
 
 	int DXCount() { return dxCount; }
-	std::string GetStatusDetail();
 
 	struct DXEntry {
 		std::string callsign;
@@ -93,19 +92,6 @@ private:
 	bool responseMatched;
 	SOCKET m_sock;
 
-	// Diagnostics: append-only log in %APPDATA%\SDRplay plus a short
-	// last-status string surfaced in the form's status label.
-	void Log(const std::string& msg);
-	void SetStatus(const std::string& s);
-	std::string GetLogPath() { return m_logPath; }
-	std::mutex m_logLock;
-	std::string m_logPath;
-	std::string m_lastStatus;
-	long long m_statRecvBytes;
-	long long m_statLines;
-	long long m_statDx;
-	long long m_statParseFail;
-	long long m_statAnnotatorCalls;
 	// Widget-state cache, see RefreshUiCache. Written on our timer thread,
 	// read on SDRuno's annotator thread, always under m_lock.
 	int m_baselineC;

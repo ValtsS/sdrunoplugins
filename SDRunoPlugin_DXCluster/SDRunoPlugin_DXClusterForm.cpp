@@ -377,23 +377,11 @@ void SDRunoPlugin_DXClusterForm::Setup()
 		// check & update annotation list (timer * 60)
 		if (m_parent.IsRunning())
 		{
-			std::string detail = m_parent.GetStatusDetail();
-			std::string caption = "Status: Running - DX count: " + std::to_string(m_parent.DXCount());
-			if (!detail.empty())
-			{
-				caption += " | " + detail;
-			}
-			statusLbl.caption(caption);
+			statusLbl.caption("Status: Running - DX count: " + std::to_string(m_parent.DXCount()));
 		}
 		else
 		{
-			std::string detail = m_parent.GetStatusDetail();
-			std::string caption = "Status: Stopped";
-			if (!detail.empty())
-			{
-				caption += " | " + detail;
-			}
-			statusLbl.caption(caption);
+			statusLbl.caption("Status: Stopped");
 			if (startBtn.caption() != "Start")
 			{
 				m_parent.StartButtonClicked("a", "1", "b", 1, "dxspider");

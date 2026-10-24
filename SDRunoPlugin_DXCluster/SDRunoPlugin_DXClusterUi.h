@@ -32,8 +32,6 @@ public:
 
 	int DXCount();
 
-	std::string GetStatusDetail();
-
 	bool GetOrderTopDown();
 	void RefreshUiCache();
 

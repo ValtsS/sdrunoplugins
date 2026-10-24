@@ -298,11 +298,6 @@ void SDRunoPlugin_DXClusterUi::RefreshUiCache()
 	m_parent.RefreshUiCache();
 }
 
-std::string SDRunoPlugin_DXClusterUi::GetStatusDetail()
-{
-	return m_parent.GetStatusDetail();
-}
-
 int SDRunoPlugin_DXClusterUi::GetColourIndex()
 {
 	return m_form->GetColourIndex();
