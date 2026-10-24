@@ -124,7 +124,13 @@ void SDRunoPlugin_DXCluster::AnnotatorProcess(std::vector<IUnoAnnotatorItem>& it
 		}
 		std::vector<long long> drawn;
 		drawn.reserve(snap.size());
-		for (size_t idx = 0; idx < snap.size(); idx++)
+		// Submit newest-first. The list is oldest-first (head) .. newest
+		// (tail); SDRuno's annotator renders the head of the returned
+		// vector and drops the rest, so a burst-sized oldest-first list
+		// would push new spots (at the tail) past the render limit and
+		// they'd never appear until reload. Reversing puts the newest
+		// spots at the head, where they always render.
+		for (size_t idx = snap.size(); idx-- > 0;)
 		{
 			IUnoAnnotatorItem im;
 			im.frequency = snap[idx].freq;
