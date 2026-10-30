@@ -9,6 +9,7 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <mstcpip.h>
 #else
 #include <unistd.h>
 #include <netdb.h>
@@ -482,8 +483,6 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 		return;
 	}
 
-	Log("worker: connecting to " + cAddr + ":" + std::to_string(port));
-
 #ifdef _WIN32
 	WSADATA wsa;
 	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
@@ -493,92 +492,275 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 	}
 #endif
 
-	SOCKET s = INVALID_SOCKET;
-	struct addrinfo hints;
-	struct addrinfo* addrs = NULL;
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
-
-	char portStr[16];
-	snprintf(portStr, sizeof(portStr), "%d", port);
-	if (getaddrinfo(cAddr.c_str(), portStr, &hints, &addrs) != 0 || addrs == NULL)
+	// Outer retry loop: whenever the connection drops we clean up and try
+	// again until the user presses Stop (which clears m_started).
+	int attempt = 0;
+	while (m_started)
 	{
-#ifdef _WIN32
-		WSACleanup();
-#endif
-		m_started = false;
-		return;
-	}
+		attempt++;
+		Log("worker: connecting to " + cAddr + ":" + std::to_string(port) + " (attempt " + std::to_string(attempt) + ")");
 
-	s = socket(addrs->ai_family, addrs->ai_socktype, addrs->ai_protocol);
+		SOCKET s = INVALID_SOCKET;
+		struct addrinfo hints;
+		struct addrinfo* addrs = NULL;
+		memset(&hints, 0, sizeof(hints));
+		hints.ai_family = AF_INET;
+		hints.ai_socktype = SOCK_STREAM;
+		hints.ai_protocol = IPPROTO_TCP;
+
+		char portStr[16];
+		snprintf(portStr, sizeof(portStr), "%d", port);
+		if (getaddrinfo(cAddr.c_str(), portStr, &hints, &addrs) != 0 || addrs == NULL)
+		{
+			Log("worker: DNS failed for '" + cAddr + "'");
+			break;
+		}
+
+		s = socket(addrs->ai_family, addrs->ai_socktype, addrs->ai_protocol);
 #ifdef _WIN32
-	if (s == INVALID_SOCKET)
-	{
-		freeaddrinfo(addrs);
-		WSACleanup();
-		m_started = false;
-		return;
-	}
+		if (s == INVALID_SOCKET)
 #else
-	if (s < 0)
-	{
-		freeaddrinfo(addrs);
-		m_started = false;
-		return;
-	}
+		if (s < 0)
 #endif
+		{
+			freeaddrinfo(addrs);
+			Log("worker: socket creation failed");
+			break;
+		}
 
-	// Publish early so StopDXCluster can abort even a stuck connect().
-	{
-		std::lock_guard<std::mutex> l(m_lock);
-		m_sock = s;
-	}
+		// Publish early so StopDXCluster can abort even a stuck connect().
+		{
+			std::lock_guard<std::mutex> l(m_lock);
+			m_sock = s;
+		}
 
-	// Connect to server with a timeout. A blocking connect() has no bound
-	// (SYN retransmits for minutes on a black-holed route) and Stop cannot
-	// rescue it before m_sock is assigned, so the join in StopDXCluster
-	// would wedge the panel. Non-blocking + select() caps this at 10 s.
-	bool connected = false;
+		// Connect to server with a timeout. A blocking connect() has no bound
+		// (SYN retransmits for minutes on a black-holed route) and Stop cannot
+		// rescue it before m_sock is assigned, so the join in StopDXCluster
+		// would wedge the panel. Non-blocking + select() caps this at 10 s.
+		bool connected = false;
 #ifdef _WIN32
-	u_long nb = 1;
-	if (ioctlsocket(s, FIONBIO, &nb) == 0)
-	{
+		u_long nb = 1;
+		if (ioctlsocket(s, FIONBIO, &nb) == 0)
+		{
+			if (connect(s, addrs->ai_addr, (int)addrs->ai_addrlen) == 0)
+			{
+				connected = true;
+			}
+			else if (WSAGetLastError() == WSAEWOULDBLOCK)
+			{
+				fd_set wf;
+				FD_ZERO(&wf);
+				FD_SET(s, &wf);
+				timeval tv;
+				tv.tv_sec = 10;
+				tv.tv_usec = 0;
+				int r = select((int)s + 1, NULL, &wf, NULL, &tv);
+				if (r > 0 && FD_ISSET(s, &wf))
+				{
+					int soerr = 0;
+					int optlen = sizeof(soerr);
+					if (getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&soerr, &optlen) == 0 && soerr == 0)
+					{
+						connected = true;
+					}
+				}
+			}
+			nb = 0;
+			ioctlsocket(s, FIONBIO, &nb);
+		}
+#else
 		if (connect(s, addrs->ai_addr, (int)addrs->ai_addrlen) == 0)
 		{
 			connected = true;
 		}
-		else if (WSAGetLastError() == WSAEWOULDBLOCK)
+#endif
+		if (!connected)
 		{
-			fd_set wf;
-			FD_ZERO(&wf);
-			FD_SET(s, &wf);
-			timeval tv;
-			tv.tv_sec = 10;
-			tv.tv_usec = 0;
-			int r = select((int)s + 1, NULL, &wf, NULL, &tv);
-			if (r > 0 && FD_ISSET(s, &wf))
 			{
-				int soerr = 0;
-				int optlen = sizeof(soerr);
-				if (getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&soerr, &optlen) == 0 && soerr == 0)
+				std::lock_guard<std::mutex> l(m_lock);
+				if (m_sock == s)
 				{
-					connected = true;
+					m_sock = INVALID_SOCKET;
 				}
 			}
-		}
-		nb = 0;
-		ioctlsocket(s, FIONBIO, &nb);
-	}
+#ifdef _WIN32
+			closesocket(s);
 #else
-	if (connect(s, addrs->ai_addr, (int)addrs->ai_addrlen) == 0)
-	{
-		connected = true;
-	}
+			close(s);
 #endif
-	if (!connected)
-	{
+			freeaddrinfo(addrs);
+			Log("worker: connect failed");
+			// Keep retrying unless the user stopped.
+			if (m_started)
+			{
+				for (int i = 0; i < 20 && m_started; i++)
+				{
+#ifdef _WIN32
+					Sleep(250);
+#else
+					usleep(250000);
+#endif
+				}
+			}
+			continue;
+		}
+		freeaddrinfo(addrs);
+		Log("worker: connected");
+
+		// Detect silent deaths (NAT/firewall drop with no FIN/RST, which
+		// would otherwise block recv forever and freeze the spot list).
+		// Keepalive probes after 60 s idle, then every 5 s, so a dead link
+		// surfaces as a recv error within about a minute and the retry loop
+		// above reconnects.
+#ifdef _WIN32
+		{
+			int one = 1;
+			setsockopt(s, SOL_SOCKET, SO_KEEPALIVE, (char*)&one, sizeof(one));
+			tcp_keepalive ka;
+			ka.onoff = 1;
+			ka.keepalivetime = 60000;      // 60 s idle before probing
+			ka.keepaliveinterval = 5000;   // then every 5 s
+			DWORD kwr = 0;
+			WSAIoctl(s, SIO_KEEPALIVE_VALS, &ka, sizeof(ka), NULL, 0, &kwr, NULL, NULL);
+		}
+#endif
+
+		{
+			std::lock_guard<std::mutex> l(m_lock);
+			if (!m_started)
+			{
+				// Stopped while connecting; StopDXCluster already closed it.
+#ifdef _WIN32
+				closesocket(s);
+#else
+				close(s);
+#endif
+				break;
+			}
+		}
+
+		// Login to Telnet Server
+		responseMatched = false;
+		if (cCallsign.length() > 1)
+		{
+			waitforstring(s, "ogin: ", false);
+			char csTmp[64];
+			snprintf(csTmp, sizeof(csTmp), "%s\r\n", cCallsign.substr(0, sizeof(csTmp) - 3).c_str());
+			sendstring(s, csTmp);
+			if (cResponse.length() > 1)
+			{
+				// Case-insensitive, 10 s timeout, DX lines seen while
+				// waiting are still processed. Some servers (e.g. SpotMux)
+				// only banner the response marker before the prompt, so
+				// without the timeout+proceed this gate never opens.
+				std::string resp = cResponse.substr(0, 200);
+				if (!waitForResponse(s, resp, 10))
+				{
+					Log("worker: login failed, reconnecting");
+					{
+						std::lock_guard<std::mutex> l(m_lock);
+						if (m_sock == s)
+						{
+							m_sock = INVALID_SOCKET;
+						}
+					}
+#ifdef _WIN32
+					closesocket(s);
+#else
+					close(s);
+#endif
+					if (m_started)
+					{
+						for (int i = 0; i < 20 && m_started; i++)
+						{
+#ifdef _WIN32
+							Sleep(250);
+#else
+							usleep(250000);
+#endif
+						}
+					}
+					continue;
+				}
+			}
+			else
+			{
+				responseMatched = true;
+			}
+		}
+		else
+		{
+			responseMatched = true;
+		}
+
+		int res;
+		char buffer[MAXBUF];
+		std::string pending;
+		bool connectionLost = false;
+
+		// Now process DX records
+		while (m_started && responseMatched)
+		{
+			bzero(buffer, MAXBUF);
+			res = recv(s, buffer, sizeof(buffer) - 1, 0);
+
+			if (res == 0)
+			{
+				// Orderly shutdown by the server.
+				Log("worker: server closed connection (recv=0)");
+				connectionLost = true;
+				break;
+			}
+
+			if (res < 0)
+			{
+#ifdef _WIN32
+				if (WSAGetLastError() == WSAEINTR)
+				{
+					continue;
+				}
+#endif
+				Log("worker: recv error, reconnecting");
+				connectionLost = true;
+				break;
+			}
+
+			if (!m_started)
+			{
+				break;
+			}
+
+			buffer[res] = 0;
+#ifdef DEBUG
+			char out[MAXBUF];
+			snprintf(out, sizeof(out), "SDRuno in %s", buffer);
+			OutputDebugStringA(out);
+#endif
+			// One recv() can hold many lines (connect burst) or half a
+			// line; split on newlines and dispatch complete lines only.
+			pending.append(buffer, res);
+			size_t nl;
+			while ((nl = pending.find('\n')) != std::string::npos)
+			{
+				std::string line = pending.substr(0, nl);
+				pending.erase(0, nl + 1);
+				if (!line.empty() && line.back() == '\r')
+				{
+					line.pop_back();
+				}
+				Log("recv: " + line);
+				if (line.find("DX de") != std::string::npos)
+				{
+					processDX(line.c_str());
+				}
+			}
+			if (pending.size() > 65536)
+			{
+				// Never saw a newline; drop garbage rather than grow forever.
+				pending.clear();
+			}
+		}
 		{
 			std::lock_guard<std::mutex> l(m_lock);
 			if (m_sock == s)
@@ -588,135 +770,29 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 		}
 #ifdef _WIN32
 		closesocket(s);
-		WSACleanup();
 #else
 		close(s);
 #endif
-		freeaddrinfo(addrs);
-		Log("worker: connect failed");
-		m_started = false;
-		return;
-	}
-	freeaddrinfo(addrs);
-	Log("worker: connected");
 
-	{
-		std::lock_guard<std::mutex> l(m_lock);
-		if (!m_started)
+		if (!m_started || !connectionLost)
 		{
-			// Stopped while connecting; StopDXCluster already closed it.
-			return;
-		}
-	}
-
-	// Login to Telnet Server
-	if (cCallsign.length() > 1)
-	{
-		waitforstring(s, "ogin: ", false);
-		responseMatched = false;
-		char csTmp[64];
-		snprintf(csTmp, sizeof(csTmp), "%s\r\n", cCallsign.substr(0, sizeof(csTmp) - 3).c_str());
-		sendstring(s, csTmp);
-		if (cResponse.length() > 1)
-		{
-			// Case-insensitive, 10 s timeout, DX lines seen while
-			// waiting are still processed. Some servers (e.g. SpotMux)
-			// only banner the response marker before the prompt, so
-			// without the timeout+proceed this gate never opens.
-			std::string resp = cResponse.substr(0, 200);
-			if (!waitForResponse(s, resp, 10))
-			{
-				m_started = false;
-			}
-		}
-		else
-		{
-			responseMatched = true;
-		}
-	}
-	else
-	{
-		responseMatched = true;
-	}
-
-	int res;
-	char buffer[MAXBUF];
-	std::string pending;
-
-	// Now process DX records
-	while (m_started && responseMatched)
-	{
-		bzero(buffer, MAXBUF);
-		res = recv(s, buffer, sizeof(buffer) - 1, 0);
-
-		if (res == 0)
-		{
-			// Orderly shutdown by the server.
-			Log("worker: server closed connection (recv=0)");
-			m_started = false;
+			// User stopped, or the loop exited for a non-network reason.
 			break;
 		}
 
-		if (res < 0)
+		Log("worker: connection lost, reconnecting in 5s");
+		for (int i = 0; i < 20 && m_started; i++)
 		{
 #ifdef _WIN32
-			if (WSAGetLastError() == WSAEINTR)
-			{
-				continue;
-			}
-#endif
-			Log("worker: recv error, stopping");
-			m_started = false;
-			break;
-		}
-
-		if (!m_started)
-		{
-			break;
-		}
-
-		buffer[res] = 0;
-#ifdef DEBUG
-		char out[MAXBUF];
-		snprintf(out, sizeof(out), "SDRuno in %s", buffer);
-		OutputDebugStringA(out);
-#endif
-		// One recv() can hold many lines (connect burst) or half a
-		// line; split on newlines and dispatch complete lines only.
-		pending.append(buffer, res);
-		size_t nl;
-		while ((nl = pending.find('\n')) != std::string::npos)
-		{
-			std::string line = pending.substr(0, nl);
-			pending.erase(0, nl + 1);
-			if (!line.empty() && line.back() == '\r')
-			{
-				line.pop_back();
-			}
-			Log("recv: " + line);
-			if (line.find("DX de") != std::string::npos)
-			{
-				processDX(line.c_str());
-			}
-		}
-		if (pending.size() > 65536)
-		{
-			// Never saw a newline; drop garbage rather than grow forever.
-			pending.clear();
-		}
-	}
-	{
-		std::lock_guard<std::mutex> l(m_lock);
-		if (m_sock == s)
-		{
-			m_sock = INVALID_SOCKET;
-		}
-	}
-#ifdef _WIN32
-	closesocket(s);
-	WSACleanup();
+			Sleep(250);
 #else
-	close(s);
+			usleep(250000);
+#endif
+		}
+	}
+
+#ifdef _WIN32
+	WSACleanup();
 #endif
 }
 
