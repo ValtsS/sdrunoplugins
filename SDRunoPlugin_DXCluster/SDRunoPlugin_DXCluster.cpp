@@ -814,6 +814,17 @@ bool SDRunoPlugin_DXCluster::TokenParseDX(const std::string& line, std::string& 
 		return false;
 	}
 	std::string rest = line.substr(dxdepos + 5);
+	// Sanitise control characters (some clusters append BEL 0x07 after the
+	// time field). Replace them with a space so they split off cleanly
+	// instead of gluing onto the HHMMZ token and breaking the match.
+	for (size_t i = 0; i < rest.size(); i++)
+	{
+		unsigned char c = (unsigned char)rest[i];
+		if (c < 0x20)
+		{
+			rest[i] = ' ';
+		}
+	}
 	// split on whitespace
 	std::vector<std::string> toks;
 	{
