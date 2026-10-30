@@ -9,3 +9,11 @@ nana/build/bin/nana_v141_Release_x86.lib
 *.user
 *.userosscache
 *.sln.docstates
+
+# Local dev tooling (not part of the plugin PR)
+probe_dxcluster.py
+fake_dxcluster.py
+spot_inject.txt
+test_dxparse.py
+dxprobe_*.txt
+__pycache__/
