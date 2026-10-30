@@ -81,6 +81,10 @@ private:
 	void clearList();
 	void add_DXEntry(std::string callsign, std::string t, long long freq);
 	bool olderThanTimer(std::string timeUTC);
+	// Canonical band anchor (Hz) for a spot frequency, used so the same
+	// DX callsign is kept once per band (DX stations work several bands)
+	// instead of once across all bands.
+	static long long BandOf(long long freqHz);
 
 	std::string cAddr;
 	std::string cPort;
@@ -91,6 +95,14 @@ private:
 	std::atomic<int> sampleRate;
 	bool responseMatched;
 	SOCKET m_sock;
+
+	// Debug logging - OFF unless the marker file
+	// %APPDATA%\SDRplay\DXClusterDebug.txt exists (drop it in, restart the
+	// plugin). Logs to %APPDATA%\SDRplay\SDRunoPlugin_DXCluster.log.
+	std::mutex m_logLock;
+	std::string m_logPath;
+	bool m_logEnabled;
+	void Log(const std::string& msg);
 
 	// Widget-state cache, see RefreshUiCache. Written on our timer thread,
 	// read on SDRuno's annotator thread, always under m_lock.

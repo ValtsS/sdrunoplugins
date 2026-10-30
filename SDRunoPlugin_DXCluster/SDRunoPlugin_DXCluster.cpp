@@ -38,10 +38,25 @@ SDRunoPlugin_DXCluster::SDRunoPlugin_DXCluster(IUnoPluginController& controller)
 	m_started(false),
 	m_sock(INVALID_SOCKET),
 	responseMatched(false),
+	m_logEnabled(false),
 	m_baselineC(-70),
 	m_colourIdxC(1),
 	m_orderTopDownC(false)
 {
+	// Debug logging is opt-in: only enabled when the marker file exists,
+	// so a stock build does zero file I/O until a tester drops it in.
+	const char* appdata = getenv("APPDATA");
+	if (appdata != NULL && appdata[0] != 0)
+	{
+		std::string dir = std::string(appdata) + "\\SDRplay";
+		m_logPath = dir + "\\SDRunoPlugin_DXCluster.log";
+		FILE* f = fopen((dir + "\\DXClusterDebug.txt").c_str(), "r");
+		if (f != NULL)
+		{
+			fclose(f);
+			m_logEnabled = true;
+		}
+	}
 }
 
 SDRunoPlugin_DXCluster::~SDRunoPlugin_DXCluster()
@@ -249,6 +264,26 @@ void SDRunoPlugin_DXCluster::HandleEvent(const UnoEvent& ev)
 	m_form.HandleEvent(ev);	
 }
 
+void SDRunoPlugin_DXCluster::Log(const std::string& msg)
+{
+	if (!m_logEnabled || m_logPath.empty())
+	{
+		return;
+	}
+	std::lock_guard<std::mutex> l(m_logLock);
+	SYSTEMTIME st;
+	GetLocalTime(&st);
+	char ts[32];
+	snprintf(ts, sizeof(ts), "%02d:%02d:%02d.%03d", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+	FILE* f = NULL;
+	fopen_s(&f, m_logPath.c_str(), "a");
+	if (f != NULL)
+	{
+		fprintf(f, "[%s] %s\n", ts, msg.c_str());
+		fclose(f);
+	}
+}
+
 // read data until needle is seen (optionally case-insensitive)
 bool SDRunoPlugin_DXCluster::waitforstring(SOCKET sockfd, const char *s, bool caseInsensitive)
 {
@@ -447,6 +482,8 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 		return;
 	}
 
+	Log("worker: connecting to " + cAddr + ":" + std::to_string(port));
+
 #ifdef _WIN32
 	WSADATA wsa;
 	if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
@@ -556,10 +593,12 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 		close(s);
 #endif
 		freeaddrinfo(addrs);
+		Log("worker: connect failed");
 		m_started = false;
 		return;
 	}
 	freeaddrinfo(addrs);
+	Log("worker: connected");
 
 	{
 		std::lock_guard<std::mutex> l(m_lock);
@@ -613,6 +652,7 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 		if (res == 0)
 		{
 			// Orderly shutdown by the server.
+			Log("worker: server closed connection (recv=0)");
 			m_started = false;
 			break;
 		}
@@ -625,6 +665,7 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 				continue;
 			}
 #endif
+			Log("worker: recv error, stopping");
 			m_started = false;
 			break;
 		}
@@ -652,6 +693,7 @@ void SDRunoPlugin_DXCluster::WorkerFunction()
 			{
 				line.pop_back();
 			}
+			Log("recv: " + line);
 			if (line.find("DX de") != std::string::npos)
 			{
 				processDX(line.c_str());
@@ -822,25 +864,33 @@ void SDRunoPlugin_DXCluster::processDXLine(const std::string& line)
 	long long llfreqHz = 0;
 	if (!TokenParseDX(line, scsign, stimeZ, llfreqHz))
 	{
+		Log("parse-drop: '" + line.substr(0, 120) + "'");
 #ifdef DEBUG
 		OutputDebugStringA("SDRuno process line error");
 #endif
 		return;
 	}
 
+	Log("accept: " + scsign + " " + std::to_string(llfreqHz) + "Hz " + stimeZ + "Z");
+	long long newBand = BandOf(llfreqHz);
 	{
 		std::lock_guard<std::mutex> l(m_lock);
 		if (head != NULL)
 		{
-			// Prune duplicate-callsign and expired entries. Unlink AND delete;
-			// keep prev on the surviving chain (old code advanced prev onto the
-			// removed node and leaked it).
+			// Prune expired entries and older spots of the SAME callsign on
+			// the SAME band (a DX station working several bands keeps one
+			// marker per band). Unlink AND delete; keep prev on the
+			// surviving chain (old code advanced prev onto the removed
+			// node and leaked it).
 			DXEntry* p = head;
 			DXEntry* prevEntry = NULL;
 			while (p != NULL)
 			{
 				DXEntry* next = p->next;
-				if (scsign.compare(p->callsign) == 0 || olderThanTimer(p->timeUTC))
+				bool sameCallsignSameBand =
+					scsign.compare(p->callsign) == 0 &&
+					BandOf(p->freq) == newBand;
+				if (sameCallsignSameBand || olderThanTimer(p->timeUTC))
 				{
 					if (prevEntry == NULL)
 					{
@@ -900,6 +950,36 @@ void SDRunoPlugin_DXCluster::clearList()
 	}
 	head = tail = current = prev = annocurr = freqcurr = NULL;
 	dxCount = 0;
+}
+
+long long SDRunoPlugin_DXCluster::BandOf(long long freqHz)
+{
+	// Canonical anchor (Hz) for the amateur band a frequency belongs to.
+	// Anything outside these ranges falls back to a 1 MHz-aligned bucket so
+	// dedup still groups sensibly (e.g. broadcast/beacon spots).
+	if (freqHz >= 1800000LL && freqHz < 2000000LL) return 1800000LL;      // 160m
+	if (freqHz >= 3500000LL && freqHz < 4000000LL) return 3500000LL;      // 80m
+	if (freqHz >= 5300000LL && freqHz < 5410000LL) return 5300000LL;      // 60m
+	if (freqHz >= 7000000LL && freqHz < 7300000LL) return 7000000LL;      // 40m
+	if (freqHz >= 10100000LL && freqHz < 10160000LL) return 10100000LL;   // 30m
+	if (freqHz >= 14000000LL && freqHz < 14360000LL) return 14000000LL;   // 20m
+	if (freqHz >= 18068000LL && freqHz < 18170000LL) return 18068000LL;   // 17m
+	if (freqHz >= 21000000LL && freqHz < 21460000LL) return 21000000LL;   // 15m
+	if (freqHz >= 24890000LL && freqHz < 24990000LL) return 24890000LL;   // 12m
+	if (freqHz >= 28000000LL && freqHz < 29710000LL) return 28000000LL;   // 10m
+	if (freqHz >= 50000000LL && freqHz < 54000000LL) return 50000000LL;   // 6m
+	if (freqHz >= 70000000LL && freqHz < 71000000LL) return 70000000LL;   // 4m (EU)
+	if (freqHz >= 144000000LL && freqHz < 148000000LL) return 144000000LL; // 2m
+	if (freqHz >= 222000000LL && freqHz < 226000000LL) return 222000000LL; // 1.25m
+	if (freqHz >= 430000000LL && freqHz < 450000000LL) return 430000000LL; // 70cm
+	if (freqHz >= 902000000LL && freqHz < 928000000LL) return 902000000LL; // 33cm
+	if (freqHz >= 1240000000LL && freqHz < 1300000000LL) return 1240000000LL; // 23cm
+	if (freqHz >= 2300000000LL && freqHz < 2450000000LL) return 2300000000LL; // 13cm
+	if (freqHz >= 3300000000LL && freqHz < 3500000000LL) return 3300000000LL; // 9cm
+	if (freqHz >= 5650000000LL && freqHz < 5926000000LL) return 5650000000LL; // 6cm
+	if (freqHz >= 10000000000LL && freqHz < 10501000000LL) return 10000000000LL; // 3cm
+	if (freqHz >= 24000000000LL && freqHz < 24260000000LL) return 24000000000LL; // 1.2cm
+	return (freqHz / 1000000LL) * 1000000LL;
 }
 
 bool SDRunoPlugin_DXCluster::olderThanTimer(std::string timeUTC)
